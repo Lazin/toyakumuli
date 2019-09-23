@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"strconv"
 	"time"
 )
 
@@ -27,7 +28,7 @@ func NewRespServer(addr string, out chan<- Point) (*RespServer, error) {
 	r.listener = l
 	r.addr = addr
 	r.out = out
-	r.done = make(chan struct{})
+	r.done = make(chan struct{}, 1)
 	go func() {
 		for {
 			conn, err := r.listener.Accept()
@@ -45,26 +46,36 @@ func (r *RespServer) processInput(conn net.Conn) {
 	scanner := bufio.NewScanner(conn)
 	var ix int = 0
 	var point Point
+	defer conn.Close()
 	for scanner.Scan() {
 		if ix%3 == 0 {
 			sname := scanner.Text()
+			if len(sname) == 0 {
+				conn.Write([]byte("!RESP error (bad sname)"))
+				return
+			}
 			point.series = sname[1:len(sname)]
 		} else if ix%3 == 1 {
 			time, err := time.Parse(layout, scanner.Text())
 			if err != nil {
 				// Ignoring errors and possibility of incomplete write
-				conn.Write([]byte("!RESP error"))
-				conn.Close()
+				conn.Write([]byte("!RESP error (bad timestamp)"))
+				return
 			}
 			point.timestamp = time
 		} else if ix%3 == 2 {
-			// TODO: Parse value
-			point.value = 3.14159
+			sval := scanner.Text()
+			val, err := strconv.ParseFloat(sval[1:len(sval)], 64)
+			if err != nil {
+				conn.Write([]byte("!RESP error (bad value)"))
+			}
+			point.value = val
 			r.out <- point
 		}
 		select {
 		case <-r.done:
-			break
+			return
+		default:
 		}
 		ix++
 	}
